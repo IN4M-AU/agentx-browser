@@ -15,6 +15,13 @@ import { Type, type Static } from "typebox";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_SCREENSHOT_FORMAT = "png";
+// Stale-session guard: upstream defaults the daemon to a 1h idle timeout, so a crashed or
+// killed Pi run leaves a browser alive for an hour. Shorten it unless the user set their own.
+// Set AGENTX_BROWSER_IDLE_TIMEOUT_MS=0 to keep agent-browser's upstream default.
+const DEFAULT_IDLE_TIMEOUT_MS = 600_000;
+if (!process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS && process.env.AGENTX_BROWSER_IDLE_TIMEOUT_MS !== "0") {
+  process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS = String(DEFAULT_IDLE_TIMEOUT_MS);
+}
 
 const GLOBAL_OPTIONS_SCHEMA = Type.Optional(Type.Object({
   session: Type.Optional(Type.String({ description: "agent-browser --session value for isolated browser state." })),
@@ -226,6 +233,20 @@ function buildGlobalArgs(global?: GlobalOptions): string[] {
   return args;
 }
 
+const usedSessions = new Map<string, GlobalOptions | undefined>();
+
+function sessionKey(global?: GlobalOptions): string {
+  return global?.session ?? process.env.AGENT_BROWSER_SESSION ?? "default";
+}
+
+// Only session-identifying flags: passing launch flags (--headed, --cdp, ...) to `close` can relaunch instead.
+function sessionArgs(global?: GlobalOptions): string[] {
+  const args: string[] = [];
+  if (global?.session) args.push("--session", global.session);
+  if (global?.sessionName) args.push("--session-name", global.sessionName);
+  return args;
+}
+
 function outputFile(content: string, prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), `agentx-browser-${prefix}-`));
   const file = join(dir, "output.txt");
@@ -344,6 +365,7 @@ async function runAgentBrowser(
   const argv = [...buildGlobalArgs(global), ...commandArgs];
   const result = await execAgentBrowser(pi, argv, signal, timeoutMs);
   if (result.code !== 0) throw new Error(formatFailure(argv, result));
+  usedSessions.set(sessionKey(global), global);
   return { argv, result };
 }
 
@@ -635,16 +657,39 @@ export default function agentxBrowser(pi: ExtensionAPI) {
       const check = await execAgentBrowser(pi, ["--version"], undefined, 10_000);
       const version = check.code === 0 ? (check.stdout || check.stderr).trim() : "not found";
       ctx.ui.notify(`agent-browser: ${version}`, check.code === 0 ? "info" : "error");
+      const sessions = await execAgentBrowser(pi, ["session", "list"], undefined, 10_000);
+      ctx.ui.notify(`Sessions: ${(sessions.stdout || sessions.stderr || "none").trim()}`, sessions.code === 0 ? "info" : "error");
       ctx.ui.notify(`Package path: ${dirname(dirname(new URL(import.meta.url).pathname))}`, "info");
     },
   });
 
+  // Close every browser this Pi session opened on exit, so nothing is left running. Failures are
+  // ignored (the browser may already be gone) and the idle timeout covers hard kills.
   pi.on("session_shutdown", async () => {
-    if (process.env.AGENTX_BROWSER_CLOSE_ON_SHUTDOWN !== "1") return;
-    try {
-      await execAgentBrowser(pi, ["close", "--all"], undefined, 5_000);
-    } catch {
-      // Browser may already be closed. Ignore shutdown cleanup failures.
+    if (process.env.AGENTX_BROWSER_KEEP_ON_SHUTDOWN === "1") return;
+    if (currentQaRecording) {
+      try {
+        await execAgentBrowser(pi, [...sessionArgs(currentQaRecording.global), "record", "stop"], undefined, 10_000);
+      } catch {
+        // Recording may already be stopped.
+      }
+      currentQaRecording = undefined;
     }
+    if (process.env.AGENTX_BROWSER_CLOSE_ON_SHUTDOWN === "1") {
+      try {
+        await execAgentBrowser(pi, ["close", "--all"], undefined, 10_000);
+      } catch {
+        // Nothing left to close.
+      }
+      return;
+    }
+    for (const global of usedSessions.values()) {
+      try {
+        await execAgentBrowser(pi, [...sessionArgs(global), "close"], undefined, 10_000);
+      } catch {
+        // Browser may already be closed.
+      }
+    }
+    usedSessions.clear();
   });
 }

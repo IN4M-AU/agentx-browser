@@ -78,6 +78,8 @@ Use batch for pre-navigation setup and fewer handoff failures:
 
 Use `global.session` for isolated run state. Use `global.sessionName`, `global.profile`, or `global.state` for persisted auth.
 
+Sessions this run used are closed automatically when Pi exits, so do not `close` manually at the end of a task. Only close early when switching headless/headed mode, since the daemon must restart in the new mode.
+
 ```json
 {
   "args": ["open", "https://app.example.com"],

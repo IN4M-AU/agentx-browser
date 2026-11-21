@@ -117,13 +117,15 @@ Quick QA kickoff:
 
 Can run alongside old `pi-agent-browser` because this package uses unique tool names (`browser_run`, `browser_snapshot`, etc.).
 
-## Runtime note
+## Session cleanup
 
-Current wrapper intentionally does not auto-install browser dependencies or auto-close browsers. To close all browser sessions on Pi shutdown:
+Browsers do not outlive their work:
 
-```bash
-set AGENTX_BROWSER_CLOSE_ON_SHUTDOWN=1
-```
+- **On Pi exit**, every session this Pi run opened is closed automatically. `AGENTX_BROWSER_KEEP_ON_SHUTDOWN=1` keeps them (e.g. to inspect a headed browser afterwards). An active QA recording is stopped first so no recorder is left running.
+- **If Pi is killed** and the exit hook cannot run, the daemon self-shuts down after 10 minutes idle (upstream default is 1 hour). Override with `AGENT_BROWSER_IDLE_TIMEOUT_MS` (raw ms, `0` disables), or set `AGENTX_BROWSER_IDLE_TIMEOUT_MS=0` to leave upstream's default alone.
+- **Other sessions are never touched.** Only sessions this run actually used are closed, so a second Pi session or a browser you started by hand keeps running. `AGENTX_BROWSER_CLOSE_ON_SHUTDOWN=1` upgrades this to `close --all`.
+
+Check what is alive with `agent-browser session list` or the `/agentx-browser-doctor` command.
 
 ## Examples
 
@@ -217,9 +219,19 @@ Old wrapper problems:
 
 - splits command string on whitespace, breaking quoted values and JSON args;
 - returns `isError` instead of throwing, so Pi may not mark failed tools correctly;
-- auto-closes browser on session shutdown;
+- auto-closes the browser on every shutdown, including sessions it never opened;
 - screenshot path extraction depends on stdout wording;
 - minimal global flag support;
 - no batch-first workflow.
 
-This package fixes those by using structured argv arrays, throwing on failures, creating screenshot paths explicitly, supporting core global flags, exposing upstream skill docs, and avoiding `browser` tool-name conflict.
+This package fixes those by using structured argv arrays, throwing on failures, creating screenshot paths explicitly, supporting core global flags, exposing upstream skill docs, avoiding `browser` tool-name conflict, and closing only the sessions the current run opened.
+
+## IN4M fork
+
+Fork of `michael-poole-softlink/agentx-browser`, maintained at `IN4M-AU/agentx-browser`. Local changes: no-stale-session cleanup (see [Session cleanup](#session-cleanup)) — sessions opened by a run are closed on Pi exit, the daemon idle timeout is dropped to 10 minutes, and active QA recordings are stopped on exit.
+
+Install this fork:
+
+```bash
+pi install git:github.com/IN4M-AU/agentx-browser
+```

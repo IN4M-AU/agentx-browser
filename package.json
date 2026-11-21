@@ -1,6 +1,6 @@
 {
   "name": "agentx-browser",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Robust Pi package for agent-browser CLI: structured browser tools, batch execution, screenshots, and bundled usage skill.",
   "type": "module",
   "keywords": [
